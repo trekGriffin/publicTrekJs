@@ -1,0 +1,27 @@
+{
+  "name": "@xephidriver2022/publictrekjs",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/trekGriffin/publicTrekJs.git"
+  },
+   
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/trekGriffin/publicTrekJs/issues"
+  },
+  "homepage": "https://github.com/trekGriffin/publicTrekJs#readme"
+  ,
+   "dependencies": {
+    "@types/mysql": "^2.15.21",
+    "moment": "^2.29.4",
+    "mysql": "^2.18.1",
+    "puppeteer": "^19.2.2"
+  }
+}
