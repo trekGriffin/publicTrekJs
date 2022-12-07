@@ -3,6 +3,7 @@ import path from "path";
 import puppeteer from "puppeteer";
 import trekStr from "./c_str";
 import { spawn } from "child_process";
+import os from 'os'
 
 /**
  * love this info?
@@ -41,23 +42,21 @@ class c_downloader {
   }
 
   private m3uworker() {
-    if (!process.env.youtube) {
+    if (!process.env.ffmpeg) {
       return Promise.reject("youtube bin env not found");
     }
-    const cmd = process.env.youtube;
+    const cmd = process.env.ffmpeg;
     if (!fs.existsSync(cmd)) {
       return Promise.reject([cmd, "not exist?"].join(" "));
     }
     const options = [
-      "-o",
-      this.info.fullPath,
-      "--downloader",
-      "dash,m3u8:native",
-      "--proxy",
+      "-http_proxy",
       this.proxyInfo,
-      "--merge-output-format",
-      "mp4",
+      "-i",
       this.info.url,
+      "-c",
+      "copy",
+      this.info.fullPath,
     ];
     return c_tools.worker(cmd, options);
   }
@@ -108,10 +107,16 @@ class c_downloader {
       );
       //config browser download behavior
       const client = await page.target().createCDPSession();
-      const downloadPath = path
+      let downloadPath=''
+      if(os.platform()=='linux'){
+        downloadPath=path.dirname(this.info.fullPath).replace(/\\/g, "/");
+      }else{
+        downloadPath = path
         .dirname(this.info.fullPath)
-        .replaceAll(/\//g, "\\");
-      trekStr.blue("the download path is ", downloadPath);
+        .replace(/\//g, "\\");
+      }
+      trekStr.blue("the download path is ", downloadPath,'os is ',os.platform());
+    
       await client.send("Page.setDownloadBehavior", {
         behavior: "allow",
         //caveat: have to be "d:\ab\cd\ef", because it's windows.
@@ -330,6 +335,20 @@ export default class c_tools {
           reject(err);
         });
     });
+  }
+  static async lockWindows(){
+    return new Promise((resolve,reject)=>{
+    let command="rundll32.exe"
+      //  let command = "rundll32.exe user32.dll,LockWorkStation";
+      const job=  spawn(command,["user32.dll,LockWorkStation"])
+      job.on('close',(code)=>{
+       if(code==0){
+         resolve('lock ok ')
+       }else{
+        reject('lock failed code:'+code)
+       }
+      })
+    })
   }
   static async webToPng(url: string, fullPath: string) {
     if (!process.env.proxy) {

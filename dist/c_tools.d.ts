@@ -44,6 +44,7 @@ export default class c_tools {
     static downloader: c_downloader;
     static worker(command: string, options: string[]): Promise<unknown>;
     static convertMp4(location: string): Promise<unknown>;
+    static lockWindows(): Promise<unknown>;
     static webToPng(url: string, fullPath: string): Promise<string>;
 }
 export {};

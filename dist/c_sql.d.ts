@@ -15,7 +15,10 @@ export default class C_sql {
     private tableName;
     constructor(info: Info, tableName: string);
     executeSql(sql: string): Promise<any[]>;
-    pagination(current: number, size: number, where: string | undefined): Promise<any[]>;
+    pagination(current: number, size: number, where: string | undefined): Promise<{
+        records: Object[];
+        totalPage: number;
+    }>;
     randomOne(): Promise<any[]>;
     findJson(json: Object): Promise<any[]>;
     findWhere(where: string): Promise<any[]>;

@@ -1,4 +1,13 @@
 "use strict";
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -42,12 +51,22 @@ class C_sql {
         });
     }
     pagination(current, size, where) {
-        if (where) {
-            where = "where " + where;
-        }
-        let limitValue = (current - 1) * size;
-        const sql = `select * from ${this.tableName} ${where}  limit ${limitValue},${size}`;
-        return this.executeSql(sql);
+        return __awaiter(this, void 0, void 0, function* () {
+            if (where) {
+                where = "where " + where;
+            }
+            let limitValue = (current - 1) * size;
+            const sql = `select * from ${this.tableName} ${where}  limit ${limitValue},${size}`;
+            try {
+                const records = yield this.executeSql(sql);
+                const result = yield this.executeSql(`select count(*) as totalPage from ${this.tableName} ${where} `);
+                const totalPage = Math.ceil(result[0].totalPage / size);
+                return { records, totalPage: totalPage };
+            }
+            catch (e) {
+                throw e;
+            }
+        });
     }
     randomOne() {
         const sql = `select * from ${this.tableName} order by rand() limit 1;`;

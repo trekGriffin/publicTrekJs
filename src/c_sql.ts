@@ -53,13 +53,23 @@ export default class C_sql {
       })
     })
   }
-  pagination(current: number, size: number, where: string | undefined) {
+  async pagination(current: number, size: number, where: string | undefined):Promise<{records:Object[],totalPage:number}> {
     if (where) {
       where = "where " + where
     }
     let limitValue = (current - 1) * size;
     const sql = `select * from ${this.tableName} ${where}  limit ${limitValue},${size}`
-    return this.executeSql(sql)
+    try{
+      const records=await  this.executeSql(sql)
+      const result=await this.executeSql(`select count(*) as totalPage from ${this.tableName} ${where} `)
+      const totalPage=Math.ceil(result[0].totalPage/size)
+      return {records,totalPage:totalPage}
+    }catch(e){
+      throw e
+    }
+   
+
+    
   }
   randomOne() {
     const sql = `select * from ${this.tableName} order by rand() limit 1;`

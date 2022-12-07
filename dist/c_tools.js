@@ -17,6 +17,7 @@ const path_1 = __importDefault(require("path"));
 const puppeteer_1 = __importDefault(require("puppeteer"));
 const c_str_1 = __importDefault(require("./c_str"));
 const child_process_1 = require("child_process");
+const os_1 = __importDefault(require("os"));
 class c_downloader {
     constructor() {
         this.downloading = false;
@@ -45,23 +46,21 @@ class c_downloader {
         return c_tools.worker(cmd, options);
     }
     m3uworker() {
-        if (!process.env.youtube) {
+        if (!process.env.ffmpeg) {
             return Promise.reject("youtube bin env not found");
         }
-        const cmd = process.env.youtube;
+        const cmd = process.env.ffmpeg;
         if (!fs_1.default.existsSync(cmd)) {
             return Promise.reject([cmd, "not exist?"].join(" "));
         }
         const options = [
-            "-o",
-            this.info.fullPath,
-            "--downloader",
-            "dash,m3u8:native",
-            "--proxy",
+            "-http_proxy",
             this.proxyInfo,
-            "--merge-output-format",
-            "mp4",
+            "-i",
             this.info.url,
+            "-c",
+            "copy",
+            this.info.fullPath,
         ];
         return c_tools.worker(cmd, options);
     }
@@ -110,10 +109,16 @@ class c_downloader {
                 yield page.waitForSelector("div[class='w-1/2 sm:w-1/3 lg:w-1/2 truncate']", { timeout: 10000 });
                 //config browser download behavior
                 const client = yield page.target().createCDPSession();
-                const downloadPath = path_1.default
-                    .dirname(this.info.fullPath)
-                    .replaceAll(/\//g, "\\");
-                c_str_1.default.blue("the download path is ", downloadPath);
+                let downloadPath = '';
+                if (os_1.default.platform() == 'linux') {
+                    downloadPath = path_1.default.dirname(this.info.fullPath).replace(/\\/g, "/");
+                }
+                else {
+                    downloadPath = path_1.default
+                        .dirname(this.info.fullPath)
+                        .replace(/\//g, "\\");
+                }
+                c_str_1.default.blue("the download path is ", downloadPath, 'os is ', os_1.default.platform());
                 yield client.send("Page.setDownloadBehavior", {
                     behavior: "allow",
                     //caveat: have to be "d:\ab\cd\ef", because it's windows.
@@ -308,6 +313,23 @@ class c_tools {
             })
                 .catch((err) => {
                 reject(err);
+            });
+        });
+    }
+    static lockWindows() {
+        return __awaiter(this, void 0, void 0, function* () {
+            return new Promise((resolve, reject) => {
+                let command = "rundll32.exe";
+                //  let command = "rundll32.exe user32.dll,LockWorkStation";
+                const job = (0, child_process_1.spawn)(command, ["user32.dll,LockWorkStation"]);
+                job.on('close', (code) => {
+                    if (code == 0) {
+                        resolve('lock ok ');
+                    }
+                    else {
+                        reject('lock failed code:' + code);
+                    }
+                });
             });
         });
     }
