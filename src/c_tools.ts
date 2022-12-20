@@ -4,44 +4,36 @@ import puppeteer from "puppeteer";
 import trekStr from "./c_str";
 import { spawn } from "child_process";
 import os from 'os'
+import nodemailer from 'nodemailer'
 
-/**
- * love this info?
- */
-type Info = {
+export type Info = {
   url: string;
   fullPath: string;
-  type: "curl" | "youtube" | "9xbuddy" | "m3u";
+  type: "curl" | "youtube" | "9xbuddy" | "m3u" | "music";
   needConvert: boolean;
 };
 
 class c_downloader {
-  private downloading: boolean = false;
+
   private proxyInfo: string = "";
-  private info: Info = {
-    url: "",
-    fullPath: "",
-    type: "curl",
-    needConvert: false,
-  };
   /**
    * curl won't ensure the output file is valid.
    * for example: a 404 status also write to a file and return code 0.
    */
-  private curlworker() {
+  private curlworker(info: Info) {
     const cmd = "curl";
     const options: string[] = [
       "-s",
       "--proxy",
       this.proxyInfo,
-      this.info.url,
+      info.url,
       "-o",
-      this.info.fullPath,
+      info.fullPath,
     ];
     return c_tools.worker(cmd, options);
   }
 
-  private m3uworker() {
+  private m3uworker(info: Info) {
     if (!process.env.ffmpeg) {
       return Promise.reject("youtube bin env not found");
     }
@@ -53,10 +45,10 @@ class c_downloader {
       "-http_proxy",
       this.proxyInfo,
       "-i",
-      this.info.url,
+      info.url,
       "-c",
       "copy",
-      this.info.fullPath,
+      info.fullPath,
     ];
     return c_tools.worker(cmd, options);
   }
@@ -64,7 +56,7 @@ class c_downloader {
    *
    * @returns youtube job
    */
-  private ytworker() {
+  private ytworker(info: Info) {
     if (!process.env.youtube) {
       return Promise.reject("youtube bin env not found");
     }
@@ -75,19 +67,134 @@ class c_downloader {
     // '--write-thumbnail',
     const options = [
       "-o",
-      this.info.fullPath,
+      info.fullPath,
       "--proxy",
       this.proxyInfo,
       "--merge-output-format",
       "mp4",
-      this.info.url,
+      info.url,
     ];
     return c_tools.worker(cmd, options);
   }
+
+  /**
+ * youtube music 9xbuddy work job
+ */
+  private async musicWorker(info: Info) {
+    const browser = await puppeteer.launch({
+      args: ["--proxy-server=" + this.proxyInfo],
+      headless: false,
+    });
+    try {
+      const url_9xbuddy = "https://offmp3.com/process?url=";
+      const dlsite = url_9xbuddy + info.url;
+      const page = await browser.newPage();
+      page.on('console', msg => console.log('PAGE LOG:', msg.text()));
+      await page.goto(dlsite, {
+        waitUntil: "networkidle2",
+      });
+      //config browser download behavior
+      const client = await page.target().createCDPSession();
+      let downloadPath = ''
+      if (os.platform() == 'linux') {
+        downloadPath = path.dirname(info.fullPath).replace(/\\/g, "/");
+      } else {
+        downloadPath = path
+          .dirname(info.fullPath)
+          .replace(/\//g, "\\");
+      }
+      trekStr.blue("the download path is ", downloadPath, 'os is ', os.platform());
+
+      await client.send("Page.setDownloadBehavior", {
+        behavior: "allow",
+        //caveat: have to be "d:\ab\cd\ef", because it's windows.
+        downloadPath: downloadPath,
+      });
+
+      console.log('finding the dom');
+
+      await page.waitForSelector(
+
+        "a[class='mx-2 no-underline text-green-500 hover:underline']",
+        { timeout: 10000 }
+      );
+      console.log('got the dom');
+
+      //download action
+      await page.waitForFunction(
+        () => {
+          let wantedVideoLink: HTMLAnchorElement | undefined = undefined;
+          console.log("finding the link...");
+          let arr = document.getElementsByTagName("a");
+          wantedVideoLink = Array.from(arr).find((ele) =>
+            ele.href.includes("/audio/")
+          );
+          console.log('find result', wantedVideoLink?.href);
+          //@ts-ignore
+          wantedVideoLink.click();
+          return true
+        },
+        { polling: 1000, timeout: 1 * 8 * 1000 }
+      );
+      //start frontend monitor...
+      const dlManager = await browser.newPage();
+      // Note: navigating to this page only works in headful chrome.
+      await dlManager.goto("chrome://downloads/");
+      console.log("chrome start downloading, see the front log...");
+      // Wait for our download to show up in the list by matching on its url.
+      let jsHandle = await dlManager.waitForFunction(
+        () => {
+          const manager = document.querySelector("downloads-manager") as any;
+          // const downloads = manager.items_.length;
+          const lastDownload = manager.items_[0];
+          if (!lastDownload) {
+            throw "cannot find the download manager ";
+          }
+          switch (lastDownload.state) {
+            case "IN_PROGRESS": {
+              console.log("polling...", Date.now(), lastDownload);
+              break;
+            }
+            case "COMPLETE": {
+              return manager.items_[0];
+            }
+            case "INTERRUPTED": {
+              throw "download interrupted";
+            }
+          }
+          //s,m,h,ms
+        },
+        { polling: 3000, timeout: 10 * 60 * 60 * 1000 }
+      );
+      //fileMeta.filePath holds the full path
+      const fileMeta = await jsHandle.jsonValue();
+      const size = fs.statSync(fileMeta.filePath).size;
+      console.log("download is over, checking size", size);
+      if (size < 1024 * 1024) {
+        throw "file size is less than 1MB, and i deleted it.size:" + size;
+      }
+      console.log(
+        [
+          "size ok, renaming from",
+          fileMeta.filePath,
+          "to",
+          info.fullPath,
+        ].join(" ")
+      );
+      fs.renameSync(fileMeta.filePath, info.fullPath);
+      await browser.close();
+    } catch (e: any) {
+      trekStr.red("puppeteer catched error, closing the browser", e);
+      await browser.close();
+      throw e;
+    }
+  }
+
+
   /**
    * buddy work job
    */
-  private async buddyworker() {
+  private async buddyworker(info: Info) {
     const browser = await puppeteer.launch({
       //const proxy="--proxy-server=127.0.0.1:8889"
       args: ["--proxy-server=" + this.proxyInfo],
@@ -95,8 +202,10 @@ class c_downloader {
     });
     try {
       const url_9xbuddy = "https://9xbuddy.com/process?url=";
-      const dlsite = url_9xbuddy + this.info.url;
+      const dlsite = url_9xbuddy + info.url;
       const page = await browser.newPage();
+      page.on('console', msg => console.log('PAGE LOG:', msg.text()));
+
       await page.goto(dlsite, {
         waitUntil: "networkidle2",
       });
@@ -105,18 +214,20 @@ class c_downloader {
         "div[class='w-1/2 sm:w-1/3 lg:w-1/2 truncate']",
         { timeout: 10000 }
       );
+      console.log('got the dom');
+      
       //config browser download behavior
       const client = await page.target().createCDPSession();
-      let downloadPath=''
-      if(os.platform()=='linux'){
-        downloadPath=path.dirname(this.info.fullPath).replace(/\\/g, "/");
-      }else{
+      let downloadPath = ''
+      if (os.platform() == 'linux') {
+        downloadPath = path.dirname(info.fullPath).replace(/\\/g, "/");
+      } else {
         downloadPath = path
-        .dirname(this.info.fullPath)
-        .replace(/\//g, "\\");
+          .dirname(info.fullPath)
+          .replace(/\//g, "\\");
       }
-      trekStr.blue("the download path is ", downloadPath,'os is ',os.platform());
-    
+      trekStr.blue("the download path is ", downloadPath, 'os is ', os.platform());
+
       await client.send("Page.setDownloadBehavior", {
         behavior: "allow",
         //caveat: have to be "d:\ab\cd\ef", because it's windows.
@@ -198,91 +309,70 @@ class c_downloader {
           "size ok, renaming from",
           fileMeta.filePath,
           "to",
-          this.info.fullPath,
+          info.fullPath,
         ].join(" ")
       );
-      fs.renameSync(fileMeta.filePath, this.info.fullPath);
+      fs.renameSync(fileMeta.filePath, info.fullPath);
       await browser.close();
-      this.downloading = false;
     } catch (e: any) {
       trekStr.red("puppeteer catched error, closing the browser", e);
       await browser.close();
-      this.downloading = false;
       throw e;
     }
   }
   setProxy(proxy: string) {
     this.proxyInfo = proxy;
   }
-
-  getInfo() {
-    return { status: this.downloading, info: this.info, proxy: this.proxyInfo };
-  }
-
-  setInfo(info: Info) {
-    this.info = info;
-    const tempPath = path.dirname(info.fullPath);
-    fs.mkdirSync(tempPath, { recursive: true });
-  }
-
   /**
    * you should love this.
    * @param info type is the info
    * @returns
    */
-  async download(info?: Info) {
+  async download(info: Info) {
     try {
       if (!this.proxyInfo) {
         throw "empty proxy setting";
       }
 
-      if (typeof info == "undefined" && !this.info) {
-        throw "empty info set url,path..etc";
-      } else {
-        //@ts-ignore
-        this.info = info;
-      }
-      //start download
-      this.downloading = true;
       trekStr.blue(
         "got download request: env:",
         this.proxyInfo,
-        JSON.stringify(this.info)
+        JSON.stringify(info)
       );
       let result;
-      if (this.info.type == "curl") {
-        result = await this.curlworker();
-      } else if (this.info.type == "youtube") {
-        result = await this.ytworker();
-      } else if (this.info.type == "m3u") {
-        result = await this.m3uworker();
-      } else if (this.info.type == "9xbuddy") {
-        result = await this.buddyworker();
+
+      if (info.type == "curl") {
+        result = await this.curlworker(info);
+      } else if (info.type == "music") {
+        result = await this.musicWorker(info);
+      } else if (info.type == "youtube") {
+        result = await this.ytworker(info);
+      } else if (info.type == "m3u") {
+        result = await this.m3uworker(info);
+      } else if (info.type == "9xbuddy") {
+        result = await this.buddyworker(info);
       } else {
         throw [
           "your type",
-          this.info.type,
+          info.type,
           "is not correct. you should use curl, youtube, 9xbuddy",
         ].join(" ");
       }
       const requiredSize = 1000;
-      const size = fs.lstatSync(this.info.fullPath).size;
+      const size = fs.lstatSync(info.fullPath).size;
       trekStr.blue("the size is ", size, "b");
       if (size < 1000) {
         let msg = ["downloaded file is less than ", requiredSize, "b"].join(
           " "
         );
         trekStr.red(msg);
-        this.downloading = false;
         throw msg;
       }
-      if (this.info.needConvert) {
-        result = await c_tools.convertMp4(this.info.fullPath);
+      if (info.needConvert) {
+        result = await c_tools.convertMp4(info.fullPath);
       }
-      this.downloading = false;
       return result;
     } catch (e: any) {
-      this.downloading = false;
       throw e;
     }
   }
@@ -336,17 +426,17 @@ export default class c_tools {
         });
     });
   }
-  static async lockWindows(){
-    return new Promise((resolve,reject)=>{
-    let command="rundll32.exe"
+  static async lockWindows() {
+    return new Promise((resolve, reject) => {
+      let command = "rundll32.exe"
       //  let command = "rundll32.exe user32.dll,LockWorkStation";
-      const job=  spawn(command,["user32.dll,LockWorkStation"])
-      job.on('close',(code)=>{
-       if(code==0){
-         resolve('lock ok ')
-       }else{
-        reject('lock failed code:'+code)
-       }
+      const job = spawn(command, ["user32.dll,LockWorkStation"])
+      job.on('close', (code) => {
+        if (code == 0) {
+          resolve('lock ok ')
+        } else {
+          reject('lock failed code:' + code)
+        }
       })
     })
   }
@@ -371,6 +461,41 @@ export default class c_tools {
       trekStr.red(e.toString());
       throw e;
     }
+  }
+
+
+  static sendMail(recipient = "ilife008@qq.com", emailSubject = "no subject", emailContent = "no content") {
+    const config = {
+      email_address: process.env.email,
+      email_password: process.env.email_password,
+      email_recipient: "ilife008@qq.com",
+      email_server: "smtp.189.cn",
+      email_port: 465,
+    }
+    const transprter = nodemailer.createTransport({
+      host: config.email_server,
+      port: config.email_port,
+      secure: true,
+      auth: {
+        user: config.email_address, // generated ethereal user
+        pass: config.email_password, // generated ethereal password
+      },
+    });
+    const mailOptions = {
+      from: config.email_address,
+      to: recipient,
+      subject: emailSubject,
+      html: emailContent,
+    };
+    transprter.sendMail(mailOptions, (error, info) => {
+
+      console.log("email job is starting...");
+      if (error) {
+        console.log("trek email job error:", error)
+      } else {
+        console.log("trek email has been sent" + info.response)
+      }
+    });
   }
 }
 

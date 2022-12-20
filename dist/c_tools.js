@@ -18,34 +18,28 @@ const puppeteer_1 = __importDefault(require("puppeteer"));
 const c_str_1 = __importDefault(require("./c_str"));
 const child_process_1 = require("child_process");
 const os_1 = __importDefault(require("os"));
+const nodemailer_1 = __importDefault(require("nodemailer"));
 class c_downloader {
     constructor() {
-        this.downloading = false;
         this.proxyInfo = "";
-        this.info = {
-            url: "",
-            fullPath: "",
-            type: "curl",
-            needConvert: false,
-        };
     }
     /**
      * curl won't ensure the output file is valid.
      * for example: a 404 status also write to a file and return code 0.
      */
-    curlworker() {
+    curlworker(info) {
         const cmd = "curl";
         const options = [
             "-s",
             "--proxy",
             this.proxyInfo,
-            this.info.url,
+            info.url,
             "-o",
-            this.info.fullPath,
+            info.fullPath,
         ];
         return c_tools.worker(cmd, options);
     }
-    m3uworker() {
+    m3uworker(info) {
         if (!process.env.ffmpeg) {
             return Promise.reject("youtube bin env not found");
         }
@@ -57,10 +51,10 @@ class c_downloader {
             "-http_proxy",
             this.proxyInfo,
             "-i",
-            this.info.url,
+            info.url,
             "-c",
             "copy",
-            this.info.fullPath,
+            info.fullPath,
         ];
         return c_tools.worker(cmd, options);
     }
@@ -68,7 +62,7 @@ class c_downloader {
      *
      * @returns youtube job
      */
-    ytworker() {
+    ytworker(info) {
         if (!process.env.youtube) {
             return Promise.reject("youtube bin env not found");
         }
@@ -79,19 +73,117 @@ class c_downloader {
         // '--write-thumbnail',
         const options = [
             "-o",
-            this.info.fullPath,
+            info.fullPath,
             "--proxy",
             this.proxyInfo,
             "--merge-output-format",
             "mp4",
-            this.info.url,
+            info.url,
         ];
         return c_tools.worker(cmd, options);
     }
     /**
+   * youtube music 9xbuddy work job
+   */
+    musicWorker(info) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const browser = yield puppeteer_1.default.launch({
+                args: ["--proxy-server=" + this.proxyInfo],
+                headless: false,
+            });
+            try {
+                const url_9xbuddy = "https://offmp3.com/process?url=";
+                const dlsite = url_9xbuddy + info.url;
+                const page = yield browser.newPage();
+                page.on('console', msg => console.log('PAGE LOG:', msg.text()));
+                yield page.goto(dlsite, {
+                    waitUntil: "networkidle2",
+                });
+                //config browser download behavior
+                const client = yield page.target().createCDPSession();
+                let downloadPath = '';
+                if (os_1.default.platform() == 'linux') {
+                    downloadPath = path_1.default.dirname(info.fullPath).replace(/\\/g, "/");
+                }
+                else {
+                    downloadPath = path_1.default
+                        .dirname(info.fullPath)
+                        .replace(/\//g, "\\");
+                }
+                c_str_1.default.blue("the download path is ", downloadPath, 'os is ', os_1.default.platform());
+                yield client.send("Page.setDownloadBehavior", {
+                    behavior: "allow",
+                    //caveat: have to be "d:\ab\cd\ef", because it's windows.
+                    downloadPath: downloadPath,
+                });
+                console.log('finding the dom');
+                yield page.waitForSelector("a[class='mx-2 no-underline text-green-500 hover:underline']", { timeout: 10000 });
+                console.log('got the dom');
+                //download action
+                yield page.waitForFunction(() => {
+                    let wantedVideoLink = undefined;
+                    console.log("finding the link...");
+                    let arr = document.getElementsByTagName("a");
+                    wantedVideoLink = Array.from(arr).find((ele) => ele.href.includes("/audio/"));
+                    console.log('find result', wantedVideoLink === null || wantedVideoLink === void 0 ? void 0 : wantedVideoLink.href);
+                    //@ts-ignore
+                    wantedVideoLink.click();
+                    return true;
+                }, { polling: 1000, timeout: 1 * 8 * 1000 });
+                //start frontend monitor...
+                const dlManager = yield browser.newPage();
+                // Note: navigating to this page only works in headful chrome.
+                yield dlManager.goto("chrome://downloads/");
+                console.log("chrome start downloading, see the front log...");
+                // Wait for our download to show up in the list by matching on its url.
+                let jsHandle = yield dlManager.waitForFunction(() => {
+                    const manager = document.querySelector("downloads-manager");
+                    // const downloads = manager.items_.length;
+                    const lastDownload = manager.items_[0];
+                    if (!lastDownload) {
+                        throw "cannot find the download manager ";
+                    }
+                    switch (lastDownload.state) {
+                        case "IN_PROGRESS": {
+                            console.log("polling...", Date.now(), lastDownload);
+                            break;
+                        }
+                        case "COMPLETE": {
+                            return manager.items_[0];
+                        }
+                        case "INTERRUPTED": {
+                            throw "download interrupted";
+                        }
+                    }
+                    //s,m,h,ms
+                }, { polling: 3000, timeout: 10 * 60 * 60 * 1000 });
+                //fileMeta.filePath holds the full path
+                const fileMeta = yield jsHandle.jsonValue();
+                const size = fs_1.default.statSync(fileMeta.filePath).size;
+                console.log("download is over, checking size", size);
+                if (size < 1024 * 1024) {
+                    throw "file size is less than 1MB, and i deleted it.size:" + size;
+                }
+                console.log([
+                    "size ok, renaming from",
+                    fileMeta.filePath,
+                    "to",
+                    info.fullPath,
+                ].join(" "));
+                fs_1.default.renameSync(fileMeta.filePath, info.fullPath);
+                yield browser.close();
+            }
+            catch (e) {
+                c_str_1.default.red("puppeteer catched error, closing the browser", e);
+                yield browser.close();
+                throw e;
+            }
+        });
+    }
+    /**
      * buddy work job
      */
-    buddyworker() {
+    buddyworker(info) {
         return __awaiter(this, void 0, void 0, function* () {
             const browser = yield puppeteer_1.default.launch({
                 //const proxy="--proxy-server=127.0.0.1:8889"
@@ -100,22 +192,24 @@ class c_downloader {
             });
             try {
                 const url_9xbuddy = "https://9xbuddy.com/process?url=";
-                const dlsite = url_9xbuddy + this.info.url;
+                const dlsite = url_9xbuddy + info.url;
                 const page = yield browser.newPage();
+                page.on('console', msg => console.log('PAGE LOG:', msg.text()));
                 yield page.goto(dlsite, {
                     waitUntil: "networkidle2",
                 });
                 //get the  download parent dom
                 yield page.waitForSelector("div[class='w-1/2 sm:w-1/3 lg:w-1/2 truncate']", { timeout: 10000 });
+                console.log('got the dom');
                 //config browser download behavior
                 const client = yield page.target().createCDPSession();
                 let downloadPath = '';
                 if (os_1.default.platform() == 'linux') {
-                    downloadPath = path_1.default.dirname(this.info.fullPath).replace(/\\/g, "/");
+                    downloadPath = path_1.default.dirname(info.fullPath).replace(/\\/g, "/");
                 }
                 else {
                     downloadPath = path_1.default
-                        .dirname(this.info.fullPath)
+                        .dirname(info.fullPath)
                         .replace(/\//g, "\\");
                 }
                 c_str_1.default.blue("the download path is ", downloadPath, 'os is ', os_1.default.platform());
@@ -181,30 +275,20 @@ class c_downloader {
                     "size ok, renaming from",
                     fileMeta.filePath,
                     "to",
-                    this.info.fullPath,
+                    info.fullPath,
                 ].join(" "));
-                fs_1.default.renameSync(fileMeta.filePath, this.info.fullPath);
+                fs_1.default.renameSync(fileMeta.filePath, info.fullPath);
                 yield browser.close();
-                this.downloading = false;
             }
             catch (e) {
                 c_str_1.default.red("puppeteer catched error, closing the browser", e);
                 yield browser.close();
-                this.downloading = false;
                 throw e;
             }
         });
     }
     setProxy(proxy) {
         this.proxyInfo = proxy;
-    }
-    getInfo() {
-        return { status: this.downloading, info: this.info, proxy: this.proxyInfo };
-    }
-    setInfo(info) {
-        this.info = info;
-        const tempPath = path_1.default.dirname(info.fullPath);
-        fs_1.default.mkdirSync(tempPath, { recursive: true });
     }
     /**
      * you should love this.
@@ -217,53 +301,44 @@ class c_downloader {
                 if (!this.proxyInfo) {
                     throw "empty proxy setting";
                 }
-                if (typeof info == "undefined" && !this.info) {
-                    throw "empty info set url,path..etc";
-                }
-                else {
-                    //@ts-ignore
-                    this.info = info;
-                }
-                //start download
-                this.downloading = true;
-                c_str_1.default.blue("got download request: env:", this.proxyInfo, JSON.stringify(this.info));
+                c_str_1.default.blue("got download request: env:", this.proxyInfo, JSON.stringify(info));
                 let result;
-                if (this.info.type == "curl") {
-                    result = yield this.curlworker();
+                if (info.type == "curl") {
+                    result = yield this.curlworker(info);
                 }
-                else if (this.info.type == "youtube") {
-                    result = yield this.ytworker();
+                else if (info.type == "music") {
+                    result = yield this.musicWorker(info);
                 }
-                else if (this.info.type == "m3u") {
-                    result = yield this.m3uworker();
+                else if (info.type == "youtube") {
+                    result = yield this.ytworker(info);
                 }
-                else if (this.info.type == "9xbuddy") {
-                    result = yield this.buddyworker();
+                else if (info.type == "m3u") {
+                    result = yield this.m3uworker(info);
+                }
+                else if (info.type == "9xbuddy") {
+                    result = yield this.buddyworker(info);
                 }
                 else {
                     throw [
                         "your type",
-                        this.info.type,
+                        info.type,
                         "is not correct. you should use curl, youtube, 9xbuddy",
                     ].join(" ");
                 }
                 const requiredSize = 1000;
-                const size = fs_1.default.lstatSync(this.info.fullPath).size;
+                const size = fs_1.default.lstatSync(info.fullPath).size;
                 c_str_1.default.blue("the size is ", size, "b");
                 if (size < 1000) {
                     let msg = ["downloaded file is less than ", requiredSize, "b"].join(" ");
                     c_str_1.default.red(msg);
-                    this.downloading = false;
                     throw msg;
                 }
-                if (this.info.needConvert) {
-                    result = yield c_tools.convertMp4(this.info.fullPath);
+                if (info.needConvert) {
+                    result = yield c_tools.convertMp4(info.fullPath);
                 }
-                this.downloading = false;
                 return result;
             }
             catch (e) {
-                this.downloading = false;
                 throw e;
             }
         });
@@ -355,6 +430,39 @@ class c_tools {
             catch (e) {
                 c_str_1.default.red(e.toString());
                 throw e;
+            }
+        });
+    }
+    static sendMail(recipient = "ilife008@qq.com", emailSubject = "no subject", emailContent = "no content") {
+        const config = {
+            email_address: process.env.email,
+            email_password: process.env.email_password,
+            email_recipient: "ilife008@qq.com",
+            email_server: "smtp.189.cn",
+            email_port: 465,
+        };
+        const transprter = nodemailer_1.default.createTransport({
+            host: config.email_server,
+            port: config.email_port,
+            secure: true,
+            auth: {
+                user: config.email_address,
+                pass: config.email_password, // generated ethereal password
+            },
+        });
+        const mailOptions = {
+            from: config.email_address,
+            to: recipient,
+            subject: emailSubject,
+            html: emailContent,
+        };
+        transprter.sendMail(mailOptions, (error, info) => {
+            console.log("email job is starting...");
+            if (error) {
+                console.log("trek email job error:", error);
+            }
+            else {
+                console.log("trek email has been sent" + info.response);
             }
         });
     }

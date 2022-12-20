@@ -1,27 +1,30 @@
 {
   "name": "@xephidriver2022/publictrekjs",
-  "version": "2022.12.101",
+  "version": "2022.91219.91649",
   "description": "",
   "main": "./dist/index.js",
   "scripts": {
+    "dev":"tsc -w",
     "build": "tsc"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/trekGriffin/publicTrekJs.git"
   },
-   
   "author": "",
   "license": "ISC",
   "bugs": {
     "url": "https://github.com/trekGriffin/publicTrekJs/issues"
   },
-  "homepage": "https://github.com/trekGriffin/publicTrekJs#readme"
-  ,
-   "dependencies": {
+  "homepage": "https://github.com/trekGriffin/publicTrekJs#readme",
+  "dependencies": {
     "@types/mysql": "^2.15.21",
     "moment": "^2.29.4",
     "mysql": "^2.18.1",
-    "puppeteer": "^19.2.2"
+    "nodemailer": "^6.8.0",
+    "puppeteer": "^19.4.0"
+  },
+  "devDependencies": {
+    "@types/nodemailer": "^6.4.6"
   }
 }
